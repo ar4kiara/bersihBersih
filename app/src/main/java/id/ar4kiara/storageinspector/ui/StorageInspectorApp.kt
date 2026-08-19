@@ -1,0 +1,50 @@
+package id.ar4kiara.storageinspector.ui
+
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
+import id.ar4kiara.storageinspector.data.FileEntity
+import id.ar4kiara.storageinspector.data.StorageStatRow
+import id.ar4kiara.storageinspector.util.asFileSize
+
+private enum class Tab(val label:String){Overview("Overview"),Analyzer("Analyzer"),Files("Files"),Cleaner("Cleaner"),More("More")}
+
+@Composable fun StorageInspectorApp(vm:MainViewModel=viewModel()){
+ var tab by remember{mutableStateOf(Tab.Overview)};val message by vm.message.collectAsState()
+ Scaffold(bottomBar={NavigationBar{Tab.entries.forEach{item->NavigationBarItem(selected=tab==item,onClick={tab=item},icon={Icon(when(item){Tab.Overview->Icons.Outlined.PieChart;Tab.Analyzer->Icons.Outlined.FilterAlt;Tab.Files->Icons.Outlined.Folder;Tab.Cleaner->Icons.Outlined.CleaningServices;Tab.More->Icons.Outlined.MoreHoriz},null)},label={Text(item.label)})}}}){pad->Box(Modifier.padding(pad).fillMaxSize()){when(tab){Tab.Overview->OverviewScreen(vm);Tab.Analyzer->AnalyzerScreen(vm);Tab.Files->FilesScreen(vm);Tab.Cleaner->CleanerScreen(vm);Tab.More->MoreScreen(vm)};if(message!=null)AlertDialog(onDismissRequest=vm::clearMessage,confirmButton={TextButton(onClick=vm::clearMessage){Text("OK")}},text={Text(message!!)})}}
+}
+
+@Composable private fun OverviewScreen(vm:MainViewModel){val cats by vm.categories.collectAsState();val bytes by vm.indexedBytes.collectAsState();val count by vm.indexedCount.collectAsState();val scan by vm.scan.collectAsState();LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{Text("Storage Inspector Pro",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Memori saya habis ke mana?",color=MaterialTheme.colorScheme.onSurfaceVariant)};item{ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text("Indexed storage",style=MaterialTheme.typography.titleMedium);Text(bytes.asFileSize(),style=MaterialTheme.typography.displaySmall,fontWeight=FontWeight.Bold);Text("$count files indexed");Button(onClick=vm::scan,modifier=Modifier.fillMaxWidth()){Icon(Icons.Outlined.Search,null);Spacer(Modifier.width(8.dp));Text(if(scan is ScanUiState.Running)"Scanning…" else "Scan storage")};if(scan is ScanUiState.Running){val s=scan as ScanUiState.Running;LinearProgressIndicator(Modifier.fillMaxWidth());Text("${s.files} files • ${s.bytes.asFileSize()}");Text(s.current,maxLines=1,overflow=TextOverflow.Ellipsis)}}}};item{Text("Storage breakdown",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold)};items(cats,key={it.label}){StatRow(it)}}}
+@Composable private fun StatRow(stat:StorageStatRow){ElevatedCard(Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(stat.label,fontWeight=FontWeight.SemiBold);Text("${stat.count} files",style=MaterialTheme.typography.bodySmall)};Text(stat.bytes.asFileSize(),fontWeight=FontWeight.Bold)}}}
+
+@Composable private fun AnalyzerScreen(vm:MainViewModel){val largest by vm.largest.collectAsState();var query by remember{mutableStateOf("")};var minSize by remember{mutableLongStateOf(0)};var preview by remember{mutableStateOf<FileEntity?>(null)};val shown=remember(largest,query,minSize){largest.filter{it.size>=minSize&&(query.isBlank()||it.name.contains(query,true)||it.source.contains(query,true)||it.category.contains(query,true))}};Column(Modifier.fillMaxSize().padding(16.dp)){Text("Analyzer",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Spacer(Modifier.height(12.dp));OutlinedTextField(query,{query=it},Modifier.fillMaxWidth(),label={Text("Search filename, type, source")},leadingIcon={Icon(Icons.Outlined.Search,null)});Spacer(Modifier.height(8.dp));Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf(0L to "All",100L*1024*1024 to ">100 MB",500L*1024*1024 to ">500 MB",1024L*1024*1024 to ">1 GB").forEach{(v,l)->FilterChip(selected=minSize==v,onClick={minSize=v},label={Text(l)})}};Spacer(Modifier.height(8.dp));Text("${shown.size} results",style=MaterialTheme.typography.labelLarge);LazyColumn(verticalArrangement=Arrangement.spacedBy(6.dp)){items(shown,key={it.uri}){FileRow(it){preview=it}}}};preview?.let{MediaPreviewDialog(it,onDismiss={preview=null},onDelete={vm.delete(listOf(it));preview=null})}}
+
+@Composable private fun FilesScreen(vm:MainViewModel){val files by vm.largest.collectAsState();var preview by remember{mutableStateOf<FileEntity?>(null)};FileListPage("Files","Largest indexed files first",files){preview=it};preview?.let{MediaPreviewDialog(it,onDismiss={preview=null},onDelete={vm.delete(listOf(it));preview=null})}}
+
+@Composable private fun CleanerScreen(vm:MainViewModel){val hidden by vm.hidden.collectAsState();val dups by vm.duplicates.collectAsState();val large by vm.largest.collectAsState();LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{Text("Cleaner",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Review first. Nothing is deleted automatically.")};item{CleanerCard("Large files",large.take(100).sumOf{it.size},"SAFE TO REVIEW","Largest indexed files")};item{CleanerCard("Hidden",hidden.sumOf{it.size},"REVIEW","Hidden does not automatically mean junk")};item{CleanerCard("Verified duplicates",dups.sumOf{it.size},"LIKELY SAFE TO REVIEW","SHA-256 verified candidate groups")};item{Button(onClick=vm::findDuplicates,Modifier.fillMaxWidth()){Text("Find verified duplicates")}}}}
+@Composable private fun CleanerCard(title:String,bytes:Long,risk:String,subtitle:String){ElevatedCard(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(title,fontWeight=FontWeight.Bold);Text(bytes.asFileSize(),style=MaterialTheme.typography.headlineSmall);Text(risk,style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary);Text(subtitle,style=MaterialTheme.typography.bodySmall)}}}
+
+@Composable private fun MoreScreen(vm:MainViewModel){val context=LocalContext.current;val c=vm.capabilities;val mediaLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){};LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Text("Access & Capabilities",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold)};item{Capability("Images",c.mediaImages.toString());Capability("Video",c.mediaVideo.toString());Capability("Audio",c.mediaAudio.toString());Capability("All Files Access",c.allFiles.toString());Capability("Android/media",c.androidMedia);Capability("Android/data",c.androidData);Capability("Private App Data",c.privateAppData);Capability("Clone Profile",c.cloneProfile)};item{Button(onClick={if(Build.VERSION.SDK_INT>=33)mediaLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES,Manifest.permission.READ_MEDIA_VIDEO,Manifest.permission.READ_MEDIA_AUDIO))else mediaLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))},Modifier.fillMaxWidth()){Text("Grant media access")}};if(Build.VERSION.SDK_INT>=30)item{OutlinedButton(onClick={runCatching{context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:${context.packageName}")))}},Modifier.fillMaxWidth()){Text("Open All Files Access settings")}};item{HorizontalDivider();Text("About",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text("Storage Inspector Pro • v1.0.0");Text("Offline-first • no tracker • no cloud upload");Text("Credit @ar4kiara",fontWeight=FontWeight.SemiBold)}}}
+@Composable private fun Capability(name:String,value:String){Row(Modifier.fillMaxWidth().padding(vertical=5.dp)){Text(name,Modifier.weight(1f));Text(value,fontWeight=FontWeight.SemiBold)}}
+@Composable private fun FileListPage(title:String,subtitle:String,files:List<FileEntity>,onClick:(FileEntity)->Unit){Column(Modifier.fillMaxSize().padding(16.dp)){Text(title,style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text(subtitle);Spacer(Modifier.height(8.dp));LazyColumn(verticalArrangement=Arrangement.spacedBy(6.dp)){items(files,key={it.uri}){FileRow(it,onClick)}}}}
+@Composable private fun FileRow(file:FileEntity,onClick:(FileEntity)->Unit={}){ElevatedCard(Modifier.fillMaxWidth().clickable{onClick(file)}){Row(Modifier.padding(10.dp),verticalAlignment=Alignment.CenterVertically){if(file.mime?.startsWith("image/")==true||file.mime?.startsWith("video/")==true)AsyncImage(model=file.uri,contentDescription=file.name,modifier=Modifier.size(52.dp))else Icon(Icons.Outlined.InsertDriveFile,null,Modifier.size(42.dp));Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){Text(file.name,maxLines=1,overflow=TextOverflow.Ellipsis,fontWeight=FontWeight.Medium);Text("${file.category} • ${file.source}",style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis);Text(file.parent,style=MaterialTheme.typography.labelSmall,maxLines=1,overflow=TextOverflow.Ellipsis)};Text(file.size.asFileSize(),fontWeight=FontWeight.SemiBold)}}}
